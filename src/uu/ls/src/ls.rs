@@ -822,6 +822,8 @@ pub struct PathData<'a> {
     must_dereference: bool,
     command_line: bool,
     is_dot_dir: bool,
+    #[cfg(windows)]
+    inode: OnceCell<Option<u128>>,
 }
 
 impl<'a> PathData<'a> {
@@ -904,6 +906,8 @@ impl<'a> PathData<'a> {
             must_dereference,
             command_line,
             is_dot_dir,
+            #[cfg(windows)]
+            inode: OnceCell::new(),
         }
     }
 
@@ -948,6 +952,20 @@ impl<'a> PathData<'a> {
     fn file_type(&self) -> Option<&FileType> {
         self.ft
             .get_or_init(|| self.metadata().map(Metadata::file_type))
+            .as_ref()
+    }
+
+    // Unfortunately, the stdlib use FindFirstFile, which does not return the file ID / inode.
+    // We cannot fix this on our side either, because we depend on lscolors which in turn
+    // assumes the stdlib Metadata type for its API.
+    // This forces us to fetch it separately which results in a ~2x slow down.
+    //
+    // The ideal solution would be for the stdlib to simply use NtQueryDirectoryFileEx.
+    // The alternative solution would be for this project to drop lscolors and use the NT API.
+    #[cfg(windows)]
+    fn file_id(&self) -> Option<&u128> {
+        self.inode
+            .get_or_init(|| uucore::fsext::file_id_for_path(self.path()).ok())
             .as_ref()
     }
 

@@ -8,7 +8,6 @@
 
 use core::ops::RangeInclusive;
 use std::cell::LazyCell;
-#[cfg(unix)]
 use std::fmt::Display;
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -68,7 +67,6 @@ pub(crate) struct LongFormat {
 }
 
 pub(crate) struct PaddingCollection {
-    #[cfg(unix)]
     pub(crate) inode: usize,
     pub(crate) link_count: usize,
     pub(crate) uname: usize,
@@ -339,6 +337,11 @@ fn digits(num: u64) -> usize {
     (num.checked_ilog10().unwrap_or(0) + 1) as usize
 }
 
+#[cfg(windows)]
+fn digits(num: u128) -> usize {
+    (num.checked_ilog10().unwrap_or(0) + 1) as usize
+}
+
 // A simple, performant, ExtendPad trait to add a string to a Vec<u8>, padding with spaces
 // on the left or right, without making additional copies, or using formatting functions.
 pub trait ExtendPad {
@@ -402,12 +405,7 @@ pub fn display_items(
         let padding_collection = calculate_padding_collection(items, config, state);
 
         for item in items {
-            #[cfg(unix)]
-            let should_display_leading_info = config.inode || config.alloc_size;
-            #[cfg(not(unix))]
-            let should_display_leading_info = config.alloc_size;
-
-            if should_display_leading_info {
+            if config.inode || config.alloc_size {
                 display_additional_leading_info(item, &padding_collection, config, &mut state.out)?;
             }
 
@@ -434,10 +432,7 @@ pub fn display_items(
 
         let mut names_vec: Vec<DisplayWithQuote> = Vec::with_capacity(items.len());
 
-        #[cfg(unix)]
         let should_display_leading_info = config.inode || config.alloc_size;
-        #[cfg(not(unix))]
-        let should_display_leading_info = config.alloc_size;
 
         for i in items {
             let more_info = if should_display_leading_info {
@@ -599,16 +594,18 @@ fn display_additional_leading_info(
     config: &Config,
     out: &mut impl Write,
 ) -> UResult<()> {
-    #[cfg(unix)]
-    {
-        if config.inode {
-            let inode = padding.inode;
-            if let Some(md) = item.metadata() {
-                write!(out, "{:>inode$} ", display_inode(md))?;
-            } else {
-                write!(out, "{:>inode$} ", '?')?;
-            }
+    if config.inode {
+        let inode = padding.inode;
+
+        #[cfg(unix)]
+        if let Some(md) = item.metadata() {
+            write!(out, "{:>inode$} ", display_inode(md))?;
+        } else {
+            write!(out, "{:>inode$} ", '?')?;
         }
+
+        #[cfg(windows)]
+        write!(out, "{:>inode$} ", display_inode(item))?;
     }
 
     if config.alloc_size {
@@ -1311,6 +1308,12 @@ fn display_inode(metadata: &Metadata) -> impl Display {
     metadata.ino().to_string()
 }
 
+#[cfg(windows)]
+fn display_inode(item: &PathData) -> impl Display {
+    item.file_id()
+        .map_or_else(|| "?".to_string(), ToString::to_string)
+}
+
 #[cfg(unix)]
 fn calculate_padding_collection(
     items: &[PathData],
@@ -1404,6 +1407,7 @@ fn calculate_padding_collection(
     state: &mut ListState,
 ) -> PaddingCollection {
     let mut padding_collections = PaddingCollection {
+        inode: 1,
         link_count: 1,
         uname: 1,
         group: 1,
@@ -1414,6 +1418,15 @@ fn calculate_padding_collection(
     };
 
     for item in items {
+        if config.inode {
+            let inode_len = if let Some(ino) = item.file_id() {
+                digits(*ino)
+            } else {
+                continue;
+            };
+            padding_collections.inode = inode_len.max(padding_collections.inode);
+        }
+
         if config.alloc_size
             && let Some(md) = item.metadata()
         {

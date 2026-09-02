@@ -204,7 +204,6 @@ pub struct Config {
     pub(crate) size_format: SizeFormat,
     pub(crate) directory: bool,
     pub(crate) time: MetadataTimeField,
-    #[cfg(unix)]
     pub(crate) inode: bool,
     pub(crate) color: Option<LsColors>,
     pub(crate) long: LongFormat,
@@ -998,7 +997,6 @@ impl Config {
             directory: options.get_flag(options::DIRECTORY),
             time,
             color,
-            #[cfg(unix)]
             inode: options.get_flag(options::INODE),
             long,
             alloc_size: options.get_flag(options::size::ALLOCATION_SIZE),
