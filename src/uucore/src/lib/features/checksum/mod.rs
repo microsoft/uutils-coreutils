@@ -657,6 +657,13 @@ pub fn unescape_filename(filename: &[u8]) -> (Vec<u8>, &'static str) {
 
 pub fn escape_filename(filename: &OsStr) -> (String, &'static str) {
     let original = filename.to_string_lossy();
+    // On Windows, backslashes are path separators — normalize them to forward
+    // slashes so that the checksum output is portable across platforms.
+    #[cfg(windows)]
+    let original = {
+        let s = original.replace('\\', "/");
+        std::borrow::Cow::<'_, str>::Owned(s)
+    };
     let escaped = original
         .replace('\\', "\\\\")
         .replace('\n', "\\n")
