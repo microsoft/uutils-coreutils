@@ -13,7 +13,7 @@
 use regex::Regex;
 #[cfg(unix)]
 use rlimit::Resource;
-#[cfg(not(target_os = "openbsd"))]
+#[cfg(not(any(target_os = "openbsd", windows)))]
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::ffi::OsStr;
@@ -1721,7 +1721,7 @@ fn test_ls_directory_dangling_symlink_uses_ln_when_or_blank() {
 }
 
 #[test]
-#[cfg(not(target_os = "openbsd"))]
+#[cfg(not(any(target_os = "openbsd", windows)))]
 fn test_ls_long_total_size() {
     let scene = TestScenario::new(util_name!());
     let at = &scene.fixtures;
@@ -1763,6 +1763,28 @@ fn test_ls_long_total_size() {
             });
         }
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn test_ls_uses_allocated_size_windows() {
+    let scene = TestScenario::new(util_name!());
+    let at = &scene.fixtures;
+    at.write_bytes("allocated", &[0; 4097]);
+
+    let allocated = uucore::nt::metadata(at.plus("allocated")).unwrap().blocks() * 512;
+
+    scene
+        .ucmd()
+        .args(&["-s", "--block-size=1", "allocated"])
+        .succeeds()
+        .stdout_only(format!("{allocated} allocated\n"));
+
+    scene
+        .ucmd()
+        .args(&["-l", "--block-size=1"])
+        .succeeds()
+        .stdout_contains_line(format!("total {allocated}"));
 }
 
 #[test]

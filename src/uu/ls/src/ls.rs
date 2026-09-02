@@ -825,6 +825,8 @@ pub struct PathData<'a> {
     #[cfg(windows)]
     inode: OnceCell<Option<u128>>,
     #[cfg(windows)]
+    nt_metadata: OnceCell<Option<uucore::nt::Metadata>>,
+    #[cfg(windows)]
     owner_group: OnceCell<uucore::nt::OwnerGroup>,
 }
 
@@ -911,6 +913,8 @@ impl<'a> PathData<'a> {
             #[cfg(windows)]
             inode: OnceCell::new(),
             #[cfg(windows)]
+            nt_metadata: OnceCell::new(),
+            #[cfg(windows)]
             owner_group: OnceCell::new(),
         }
     }
@@ -970,6 +974,29 @@ impl<'a> PathData<'a> {
     fn file_id(&self) -> Option<&u128> {
         self.inode
             .get_or_init(|| uucore::fsext::file_id_for_path(self.path()).ok())
+            .as_ref()
+    }
+
+    #[cfg(windows)]
+    fn link_count(&self) -> Option<u64> {
+        self.nt_metadata().map(uucore::nt::Metadata::nlink)
+    }
+
+    #[cfg(windows)]
+    fn allocation_size(&self) -> Option<u64> {
+        self.nt_metadata().map(|m| m.blocks() * 512)
+    }
+
+    #[cfg(windows)]
+    fn nt_metadata(&self) -> Option<&uucore::nt::Metadata> {
+        self.nt_metadata
+            .get_or_init(|| {
+                if self.must_dereference {
+                    uucore::nt::metadata(self.path()).ok()
+                } else {
+                    uucore::nt::symlink_metadata(self.path()).ok()
+                }
+            })
             .as_ref()
     }
 
@@ -1360,7 +1387,7 @@ fn write_directory_entries<O: LsOutput>(
             .map(|item| {
                 item.metadata()
                     .as_ref()
-                    .map_or(0, |md| get_block_size(md, config))
+                    .map_or(0, |md| get_block_size(item, md, config))
             })
             .sum();
         output.write_total(total_size, config)?;
@@ -1578,7 +1605,7 @@ fn get_metadata_with_deref_opt(p_buf: &Path, dereference: bool) -> std::io::Resu
 }
 
 #[allow(unused_variables)]
-fn get_block_size(md: &Metadata, config: &Config) -> u64 {
+fn get_block_size(item: &PathData, md: &Metadata, config: &Config) -> u64 {
     /* GNU ls will display sizes in terms of block size
        md.len() will differ from this value when the file has some holes
     */
@@ -1596,9 +1623,19 @@ fn get_block_size(md: &Metadata, config: &Config) -> u64 {
             SizeFormat::Bytes => raw_blocks / config.block_size,
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        // no way to get block size for windows, fall-back to file size
+        use uucore::format::human::SizeFormat;
+
+        let raw_blocks = item.allocation_size().unwrap_or(md.len());
+        match config.size_format {
+            SizeFormat::Binary | SizeFormat::Decimal => raw_blocks,
+            SizeFormat::Bytes => raw_blocks / config.block_size,
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // no way to get block size, fall-back to file size
         md.len()
     }
 }

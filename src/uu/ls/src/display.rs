@@ -316,7 +316,9 @@ fn display_dir_entry_size(
         };
         #[cfg(unix)]
         let nlink_len = digits(md.nlink());
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let nlink_len = display_symlink_count(entry).len();
+        #[cfg(not(any(unix, windows)))]
         let nlink_len = display_symlink_count(md).len();
         (
             nlink_len,
@@ -609,7 +611,7 @@ fn display_additional_leading_info(
 
     if config.alloc_size {
         let s: Cow<'_, str> = if let Some(md) = item.metadata() {
-            display_size(get_block_size(md, config), config).into()
+            display_size(get_block_size(item, md, config), config).into()
         } else {
             "?".into()
         };
@@ -1027,9 +1029,13 @@ fn display_item_long(
                 .push(alt_access_indicator(item, config, is_acl_set));
         }
         state.display_buf.push(b' ');
+        #[cfg(windows)]
+        let symlink_count = display_symlink_count(item);
+        #[cfg(not(windows))]
+        let symlink_count = display_symlink_count(md);
         state
             .display_buf
-            .extend_pad_left(&display_symlink_count(md), padding.link_count);
+            .extend_pad_left(&symlink_count, padding.link_count);
 
         if config.long.owner {
             state.display_buf.push(b' ');
@@ -1355,6 +1361,11 @@ fn display_symlink_count(metadata: &Metadata) -> String {
     metadata.nlink().to_string()
 }
 
+#[cfg(windows)]
+fn display_symlink_count(item: &PathData) -> String {
+    item.link_count().unwrap_or(1).to_string()
+}
+
 #[cfg(unix)]
 fn display_inode(metadata: &Metadata) -> impl Display {
     metadata.ino().to_string()
@@ -1399,7 +1410,7 @@ fn calculate_padding_collection(
         if config.alloc_size
             && let Some(md) = item.metadata()
         {
-            let block_size_len = display_size(get_block_size(md, config), config).len();
+            let block_size_len = display_size(get_block_size(item, md, config), config).len();
             padding_collections.block_size = block_size_len.max(padding_collections.block_size);
         }
 
@@ -1445,10 +1456,8 @@ fn calculate_padding_collection(
     padding_collections
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn display_symlink_count(_metadata: &Metadata) -> String {
-    // Currently not sure of how to get this on Windows, so I'm punting.
-    // Git Bash looks like it may do the same thing.
     String::from("1")
 }
 
@@ -1482,7 +1491,7 @@ fn calculate_padding_collection(
         if config.alloc_size
             && let Some(md) = item.metadata()
         {
-            let block_size_len = display_size(get_block_size(md, config), config).len();
+            let block_size_len = display_size(get_block_size(item, md, config), config).len();
             padding_collections.block_size = block_size_len.max(padding_collections.block_size);
         }
 
