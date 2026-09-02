@@ -1110,6 +1110,16 @@ pub fn makedev(maj: core::ffi::c_uint, min: core::ffi::c_uint) -> libc::dev_t {
     (min & 0xff) | ((maj & 0xfff) << 8) | ((min & !0xff) << 12) | ((maj & !0xfff) << 32)
 }
 
+#[cfg(not(unix))]
+pub fn major(_: u64) -> libc::c_uint {
+    0
+}
+
+#[cfg(not(unix))]
+pub fn minor(_: u64) -> libc::c_uint {
+    0
+}
+
 #[cfg(test)]
 mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.

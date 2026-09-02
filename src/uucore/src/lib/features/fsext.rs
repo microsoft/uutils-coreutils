@@ -24,7 +24,7 @@ static EXIT_ERR: i32 = 1;
 ))]
 use crate::os_str_from_bytes;
 
-#[cfg(not(any(windows, target_os = "wasi")))]
+#[cfg(not(target_os = "wasi"))]
 use std::ffi::OsStr;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -630,7 +630,6 @@ impl FsUsage {
     }
 }
 
-#[cfg(unix)]
 pub trait FsMeta {
     fn fs_type(&self) -> i64;
     fn io_size(&self) -> u64;
@@ -904,6 +903,55 @@ pub fn statfs(path: &OsStr) -> Result<StatFs, String> {
     }
 }
 
+pub type StatFs = FsUsage;
+
+impl FsMeta for StatFs {
+    fn fs_type(&self) -> i64 {
+        0
+    }
+
+    fn io_size(&self) -> u64 {
+        self.blocksize
+    }
+
+    fn block_size(&self) -> i64 {
+        self.blocksize as i64
+    }
+
+    fn total_blocks(&self) -> u64 {
+        self.blocks
+    }
+
+    fn free_blocks(&self) -> u64 {
+        self.bfree
+    }
+
+    fn avail_blocks(&self) -> u64 {
+        self.bavail
+    }
+
+    fn total_file_nodes(&self) -> u64 {
+        self.files
+    }
+
+    fn free_file_nodes(&self) -> u64 {
+        self.ffree
+    }
+
+    fn fsid(&self) -> u64 {
+        0
+    }
+
+    fn namelen(&self) -> u64 {
+        0
+    }
+}
+
+#[cfg(windows)]
+pub fn statfs(path: &OsStr) -> Result<StatFs, String> {
+    StatFs::new(Path::new(path)).map_err(|e| e.to_string())
+}
+
 #[cfg(unix)]
 pub fn pretty_filetype(mode: mode_t, size: u64) -> String {
     match mode & S_IFMT {
@@ -921,6 +969,36 @@ pub fn pretty_filetype(mode: mode_t, size: u64) -> String {
         S_IFIFO => "fifo",
         S_IFSOCK => "socket",
         // TODO: Other file types
+        _ => return format!("weird file ({:07o})", mode & S_IFMT),
+    }
+    .to_owned()
+}
+
+#[cfg(not(unix))]
+pub fn pretty_filetype(mode: u32, size: u64) -> String {
+    const S_IFMT: u32 = 0o170_000;
+    const S_IFSOCK: u32 = 0o140_000;
+    const S_IFLNK: u32 = 0o120_000;
+    const S_IFREG: u32 = 0o100_000;
+    const S_IFBLK: u32 = 0o060_000;
+    const S_IFDIR: u32 = 0o040_000;
+    const S_IFCHR: u32 = 0o020_000;
+    const S_IFIFO: u32 = 0o010_000;
+
+    match mode & S_IFMT {
+        S_IFREG => {
+            if size == 0 {
+                "regular empty file"
+            } else {
+                "regular file"
+            }
+        }
+        S_IFDIR => "directory",
+        S_IFLNK => "symbolic link",
+        S_IFCHR => "character special file",
+        S_IFBLK => "block special file",
+        S_IFIFO => "fifo",
+        S_IFSOCK => "socket",
         _ => return format!("weird file ({:07o})", mode & S_IFMT),
     }
     .to_owned()

@@ -3453,7 +3453,6 @@ fn test_ls_color() {
     assert_eq!(result.stdout_str(), expected);
 }
 
-#[cfg(unix)]
 #[test]
 #[cfg(not(feature = "selinux"))]
 // Disabled on the SELinux runner for now
@@ -3468,7 +3467,7 @@ fn test_ls_inode() {
     let re_long =
         Regex::new(r" *(\d+) [-bcdlpsDx]([r-][w-][xt-]){3}[.+]? +\d .+ test_inode").unwrap();
 
-    let result = scene.ucmd().arg("test_inode").arg("-i").succeeds();
+    let result = scene.ucmd().arg("-i").arg("test_inode").succeeds();
     assert!(re_short.is_match(result.stdout_str()));
     let inode_short = re_short
         .captures(result.stdout_str())
@@ -3495,6 +3494,42 @@ fn test_ls_inode() {
     assert!(!result.stdout_str().contains(inode_long));
 
     assert_eq!(inode_short, inode_long);
+}
+
+#[cfg(windows)]
+#[test]
+fn test_ls_numeric_owner_and_group_windows() {
+    let scene = TestScenario::new(util_name!());
+    let at = &scene.fixtures;
+    at.touch("numeric-identity");
+
+    let identities = uucore::nt::path_to_owner_and_group(&at.plus("numeric-identity")).unwrap();
+    let owner = uucore::nt::sid_to_string(&identities.owner_sid);
+    let group = uucore::nt::sid_to_string(&identities.group_sid);
+
+    let result = scene.ucmd().args(&["-n", "numeric-identity"]).succeeds();
+    let fields: Vec<_> = result.stdout_str().split_whitespace().collect();
+    assert_eq!(fields[2], owner);
+    assert_eq!(fields[3], group);
+}
+
+#[cfg(windows)]
+#[test]
+fn test_ls_long_displays_hard_link_count_windows() {
+    let scene = TestScenario::new(util_name!());
+    let at = &scene.fixtures;
+    at.touch("original");
+    at.hard_link("original", "link");
+
+    let result = scene.ucmd().args(&["-l", "original", "link"]).succeeds();
+    for name in ["original", "link"] {
+        let line = result
+            .stdout_str()
+            .lines()
+            .find(|line| line.ends_with(name))
+            .unwrap();
+        assert_eq!(line.split_whitespace().nth(1), Some("2"));
+    }
 }
 
 #[test]

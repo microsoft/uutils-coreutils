@@ -824,6 +824,8 @@ pub struct PathData<'a> {
     is_dot_dir: bool,
     #[cfg(windows)]
     inode: OnceCell<Option<u128>>,
+    #[cfg(windows)]
+    owner_group: OnceCell<uucore::nt::OwnerGroup>,
 }
 
 impl<'a> PathData<'a> {
@@ -908,6 +910,8 @@ impl<'a> PathData<'a> {
             is_dot_dir,
             #[cfg(windows)]
             inode: OnceCell::new(),
+            #[cfg(windows)]
+            owner_group: OnceCell::new(),
         }
     }
 
@@ -969,6 +973,16 @@ impl<'a> PathData<'a> {
             .as_ref()
     }
 
+    #[cfg(windows)]
+    fn owner_group(&self) -> &uucore::nt::OwnerGroup {
+        self.owner_group.get_or_init(|| {
+            uucore::nt::path_to_owner_and_group(&self.p_buf).unwrap_or(uucore::nt::OwnerGroup {
+                owner_sid: [0u8; uucore::nt::SECURITY_MAX_SID_SIZE],
+                group_sid: [0u8; uucore::nt::SECURITY_MAX_SID_SIZE],
+            })
+        })
+    }
+
     fn is_dangling_link(&self) -> bool {
         // deref enabled, self is real dir entry, self has metadata associated with link, but not with target
         self.must_dereference && self.file_type().is_none() && self.metadata().is_none()
@@ -1026,19 +1040,7 @@ impl Colorable for PathData<'_> {
 struct ListState<'a> {
     out: BufWriter<Stdout>,
     style_manager: Option<StyleManager<'a>>,
-    // TODO: More benchmarking with different use cases is required here.
-    // From experiments, BTreeMap may be faster than HashMap, especially as the
-    // number of users/groups is very limited. It seems like nohash::IntMap
-    // performance was equivalent to BTreeMap.
-    // It's possible a simple vector linear(binary?) search implementation would be even faster.
-    #[cfg(unix)]
-    uid_cache: FxHashMap<u32, String>,
-    #[cfg(unix)]
-    gid_cache: FxHashMap<u32, String>,
-    #[cfg(not(unix))]
-    uid_cache: (),
-    #[cfg(not(unix))]
-    gid_cache: (),
+    owner_group_caches: display::OwnerGroupCache,
     recent_time_range: RangeInclusive<SystemTime>,
     display_buf: Vec<u8>,
 }
@@ -1058,14 +1060,7 @@ impl<'a> TextOutput<'a> {
             state: ListState {
                 out: BufWriter::new(stdout()),
                 style_manager: config.color.as_ref().map(StyleManager::new),
-                #[cfg(unix)]
-                uid_cache: FxHashMap::default(),
-                #[cfg(unix)]
-                gid_cache: FxHashMap::default(),
-                #[cfg(not(unix))]
-                uid_cache: (),
-                #[cfg(not(unix))]
-                gid_cache: (),
+                owner_group_caches: display::OwnerGroupCache::default(),
                 // Use "recent" format for files modified within the last ~0.5 years (31556952s).
                 // According to GNU a Gregorian year has 365.2425 * 24 * 60 * 60 == 31556952 seconds on the average.
                 recent_time_range: (SystemTime::now() - Duration::new(31_556_952 / 2, 0))
