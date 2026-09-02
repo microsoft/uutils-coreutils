@@ -10,7 +10,7 @@ use std::path::Path;
 
 use clap::ArgMatches;
 use uucore::error::UResult;
-use uucore::fsext::{FsUsage, MountInfo};
+use uucore::fsext::{FsUsage, MountInfo, statfs};
 use uucore::translate;
 
 use crate::OPT_INODES;
@@ -27,7 +27,7 @@ pub(crate) fn fs_usage(mount_info: &MountInfo) -> Option<FsUsage> {
     } else {
         mount_info.mount_dir.as_os_str()
     };
-    FsUsage::new(Path::new(stat_path)).ok()
+    Some(FsUsage::new(statfs(stat_path).ok()?))
 }
 
 /// Find and create the filesystem from the given mount.

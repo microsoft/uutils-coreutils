@@ -46,6 +46,8 @@ const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA0000003;
 #[allow(non_upper_case_globals)]
 pub const FileBasicInformation: u32 = 4;
 #[allow(non_upper_case_globals)]
+pub const FileFsVolumeInformation: u32 = 1;
+#[allow(non_upper_case_globals)]
 pub const FileFsDeviceInformation: u32 = 4;
 #[allow(non_upper_case_globals)]
 pub const FileFsAttributeInformation: u32 = 5;
@@ -57,6 +59,15 @@ pub const FileIdInformation: u32 = 59;
 pub const FileStatInformation: u32 = 68;
 #[allow(non_upper_case_globals)]
 pub const FileStatLxInformation: u32 = 70;
+
+#[repr(C)]
+pub struct FILE_FS_VOLUME_INFORMATION {
+    pub volume_creation_time: i64,
+    pub volume_serial_number: u32,
+    pub volume_label_length: u32,
+    pub supports_objects: u8,
+    pub volume_label: [u16; 128],
+}
 
 #[repr(C)]
 pub struct FILE_FS_DEVICE_INFORMATION {
