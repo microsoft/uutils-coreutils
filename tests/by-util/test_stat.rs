@@ -5,13 +5,20 @@
 
 // spell-checker:ignore crème brûlée
 
+#[cfg(unix)]
 use uutests::at_and_ucmd;
 use uutests::new_ucmd;
+#[cfg(unix)]
 use uutests::unwrap_or_return;
-use uutests::util::{TestScenario, expected_result};
+use uutests::util::TestScenario;
+#[cfg(unix)]
+use uutests::util::expected_result;
 use uutests::util_name;
 
-use std::fs::{File, FileTimes, metadata};
+#[cfg(unix)]
+use std::fs::metadata;
+use std::fs::{File, FileTimes};
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -284,6 +291,7 @@ fn test_timestamp_format() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn test_timestamp_format_preserves_nanoseconds() {
     let ts = TestScenario::new(util_name!());
@@ -328,7 +336,12 @@ fn test_timestamp_format_before_epoch() {
     ts.ucmd()
         .args(&["-c", "%.1X %.3X %.9X %.1Y %.3Y %.9Y", "timestamp"])
         .succeeds()
-        .stdout_is("-0.9 -0.877 -0.876543211 -0.9 -0.877 -0.876543211\n");
+        .stdout_is(if cfg!(windows) {
+            // Windows file times have 100 ns resolution.
+            "-0.9 -0.877 -0.876543200 -0.9 -0.877 -0.876543200\n"
+        } else {
+            "-0.9 -0.877 -0.876543211 -0.9 -0.877 -0.876543211\n"
+        });
 }
 
 #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
@@ -514,15 +527,19 @@ fn test_quoting_style_locale() {
         .succeeds()
         .stdout_only("\"'\"\n");
 
-    // testing file having "
-    at.touch("\"");
-    ts.ucmd()
-        .args(&["-c", "%N", "\""])
-        .succeeds()
-        .stdout_only("\'\"\'\n");
+    #[cfg(not(windows))]
+    {
+        // Test a file containing `"`, which Windows does not allow in a filename.
+        at.touch("\"");
+        ts.ucmd()
+            .args(&["-c", "%N", "\""])
+            .succeeds()
+            .stdout_only("\'\"\'\n");
+    }
 }
 
 #[test]
+#[cfg(not(windows))]
 fn test_quoting_newline_in_filename() {
     let ts = TestScenario::new(util_name!());
     let at = &ts.fixtures;

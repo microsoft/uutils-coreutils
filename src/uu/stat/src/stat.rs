@@ -6,14 +6,13 @@
 
 use std::ops::Range;
 use uucore::diagnostics::OptionValue;
-use uucore::error::{UError, UResult, USimpleError};
+use uucore::error::{UError, UIoError, UResult, USimpleError};
 use uucore::i18n::UEncoding;
 use uucore::quoting_style::{QuotingStyle as UucoreQuotingStyle, escape_name};
 use uucore::translate;
 
 use clap::builder::ValueParser;
 use uucore::display::Quotable;
-use uucore::error::strip_errno;
 use uucore::fs::{display_permissions_unix, major, minor};
 use uucore::fsext::{
     FsMeta, MetadataTimeField, StatFs, pretty_filetype, pretty_fstype, read_fs_list, statfs,
@@ -1171,6 +1170,7 @@ impl Stater {
     }
 
     fn exec(&self) -> UResult<i32> {
+        #[cfg(not(windows))]
         let stdin_is_fifo = rustix::fs::fstat(io::stdin())
             .is_ok_and(|s| rustix::fs::FileType::from_raw_mode(s.st_mode).is_fifo());
 
@@ -1448,7 +1448,7 @@ impl Stater {
                         "{}",
                         StatError::CannotStatx {
                             file: display_name.quote().to_string(),
-                            error: strip_errno(&e)
+                            error: UIoError::from(e).to_string()
                         }
                     );
                     return Ok(1);
