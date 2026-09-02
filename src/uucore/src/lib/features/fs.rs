@@ -776,12 +776,6 @@ pub fn is_symlink_loop(path: &Path) -> bool {
     false
 }
 
-#[cfg(not(unix))]
-// Hard link comparison is not supported on non-Unix platforms
-pub fn are_hardlinks_to_same_file(_source: &Path, _target: &Path) -> bool {
-    false
-}
-
 /// Checks if two paths are hard links to the same file.
 ///
 /// # Arguments
@@ -792,23 +786,32 @@ pub fn are_hardlinks_to_same_file(_source: &Path, _target: &Path) -> bool {
 /// # Returns
 ///
 /// * `bool` - Returns `true` if the paths are hard links to the same file, and `false` otherwise.
-#[cfg(unix)]
 pub fn are_hardlinks_to_same_file(source: &Path, target: &Path) -> bool {
-    // The target is usually the one that does not exist, so look it up first
-    // and return early instead of also querying the source for nothing.
-    let Ok(target_metadata) = fs::symlink_metadata(target) else {
-        return false;
-    };
-    let Ok(source_metadata) = fs::symlink_metadata(source) else {
-        return false;
-    };
+    #[cfg(unix)]
+    {
+        let (Ok(source_metadata), Ok(target_metadata)) =
+            (fs::symlink_metadata(source), fs::symlink_metadata(target))
+        else {
+            return false;
+        };
 
-    source_metadata.ino() == target_metadata.ino() && source_metadata.dev() == target_metadata.dev()
-}
+        source_metadata.ino() == target_metadata.ino()
+            && source_metadata.dev() == target_metadata.dev()
+    }
 
-#[cfg(not(unix))]
-pub fn are_hardlinks_or_one_way_symlink_to_same_file(_source: &Path, _target: &Path) -> bool {
-    false
+    #[cfg(windows)]
+    {
+        infos_refer_to_same_file(
+            FileInformation::from_path(source, false),
+            FileInformation::from_path(target, false),
+        )
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        _ = (source, target);
+        false
+    }
 }
 
 /// Checks if either two paths are hard links to the same file or if the source path is a symbolic link which when fully resolved points to target path
@@ -821,18 +824,32 @@ pub fn are_hardlinks_or_one_way_symlink_to_same_file(_source: &Path, _target: &P
 /// # Returns
 ///
 /// * `bool` - Returns `true` if either of above conditions are true, and `false` otherwise.
-#[cfg(unix)]
 pub fn are_hardlinks_or_one_way_symlink_to_same_file(source: &Path, target: &Path) -> bool {
-    // As above, look up the target first: if it does not exist, there is
-    // nothing to compare the source with.
-    let Ok(target_metadata) = fs::symlink_metadata(target) else {
-        return false;
-    };
-    let Ok(source_metadata) = fs::metadata(source) else {
-        return false;
-    };
+    #[cfg(unix)]
+    {
+        let (Ok(source_metadata), Ok(target_metadata)) =
+            (fs::metadata(source), fs::symlink_metadata(target))
+        else {
+            return false;
+        };
 
-    source_metadata.ino() == target_metadata.ino() && source_metadata.dev() == target_metadata.dev()
+        source_metadata.ino() == target_metadata.ino()
+            && source_metadata.dev() == target_metadata.dev()
+    }
+
+    #[cfg(windows)]
+    {
+        infos_refer_to_same_file(
+            FileInformation::from_path(source, true),
+            FileInformation::from_path(target, false),
+        )
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        _ = (source, target);
+        false
+    }
 }
 
 /// Returns true if the passed `path` ends with a path terminator.
@@ -1124,12 +1141,10 @@ pub fn minor(_: u64) -> libc::c_uint {
 mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     use std::io::Write;
     #[cfg(unix)]
     use std::os::unix;
-    #[cfg(unix)]
-    use tempfile::{NamedTempFile, tempdir};
 
     struct NormalizePathTestCase<'a> {
         path: &'a str,
@@ -1271,7 +1286,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_is_symlink_loop_no_loop() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
         let file_path = temp_dir.path().join("file.txt");
         let symlink_path = temp_dir.path().join("symlink");
 
@@ -1284,7 +1299,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_is_symlink_loop_direct_loop() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
         let symlink_path = temp_dir.path().join("loop");
 
         unix::fs::symlink(&symlink_path, &symlink_path).unwrap();
@@ -1295,7 +1310,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_is_symlink_loop_indirect_loop() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
         let symlink1_path = temp_dir.path().join("symlink1");
         let symlink2_path = temp_dir.path().join("symlink2");
 
@@ -1305,10 +1320,10 @@ mod tests {
         assert!(is_symlink_loop(&symlink1_path));
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn test_are_hardlinks_to_same_file_same_file() {
-        let mut temp_file = NamedTempFile::new().unwrap();
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
         writeln!(temp_file, "Test content").unwrap();
 
         let path1 = temp_file.path();
@@ -1317,13 +1332,13 @@ mod tests {
         assert!(are_hardlinks_to_same_file(path1, path2));
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn test_are_hardlinks_to_same_file_different_files() {
-        let mut temp_file1 = NamedTempFile::new().unwrap();
+        let mut temp_file1 = tempfile::NamedTempFile::new().unwrap();
         writeln!(temp_file1, "Test content 1").unwrap();
 
-        let mut temp_file2 = NamedTempFile::new().unwrap();
+        let mut temp_file2 = tempfile::NamedTempFile::new().unwrap();
         writeln!(temp_file2, "Test content 2").unwrap();
 
         let path1 = temp_file1.path();
@@ -1332,10 +1347,10 @@ mod tests {
         assert!(!are_hardlinks_to_same_file(path1, path2));
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn test_are_hardlinks_to_same_file_hard_link() {
-        let mut temp_file = NamedTempFile::new().unwrap();
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
         writeln!(temp_file, "Test content").unwrap();
         let path1 = temp_file.path();
 
