@@ -29,6 +29,7 @@ fluent = { workspace = true }
 
 [features]
 openssl = ["uucore/openssl"]
+windows-cng = ["uucore/windows-cng"]
 
 [dev-dependencies]
 uucore = { workspace = true, features = ["benchmark"] }

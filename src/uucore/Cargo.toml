@@ -190,8 +190,6 @@ sum = [
   "digest",
   "hex",
   "memchr",
-  "md-5",
-  "sha1",
   "sha2",
   "sha3",
   "shake",
@@ -200,6 +198,10 @@ sum = [
   "sm3",
   "crc-fast",
   "data-encoding",
+]
+sum-rust-pure = [
+  "md-5",
+  "sha1",
 ]
 # Use OpenSSL (libcrypto) for md5/sha1/sha2-family digests instead of the
 # pure-Rust crates. This dramatically speeds up checksum utilities on CPUs
@@ -214,6 +216,7 @@ tty = []
 time = ["jiff"]
 uptime = ["jiff", "libc", "rustix/time", "utmp-classic", "utmpx", "windows-sys"]
 benchmark = ["divan", "itertools", "tempfile"]
+windows-cng = []
 
 [lints]
 workspace = true

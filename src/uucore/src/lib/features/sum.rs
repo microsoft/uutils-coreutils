@@ -467,30 +467,30 @@ macro_rules! impl_digest_shake {
 // backed by OpenSSL's libcrypto, which provides hand-tuned assembly
 // implementations (AVX2, SSSE3, etc.) that are substantially faster than the
 // pure-Rust crates on CPUs without SHA-NI.
-#[cfg(not(feature = "openssl"))]
+#[cfg(not(any(feature = "openssl", feature = "windows-cng")))]
 pub struct Md5(md5::Md5);
-#[cfg(not(feature = "openssl"))]
+#[cfg(not(any(feature = "openssl", feature = "windows-cng")))]
 pub struct Sha1(sha1::Sha1);
 #[cfg(not(feature = "openssl"))]
 pub struct Sha224(sha2::Sha224);
-#[cfg(not(feature = "openssl"))]
+#[cfg(not(any(feature = "openssl", feature = "windows-cng")))]
 pub struct Sha256(sha2::Sha256);
-#[cfg(not(feature = "openssl"))]
+#[cfg(not(any(feature = "openssl", feature = "windows-cng")))]
 pub struct Sha384(sha2::Sha384);
-#[cfg(not(feature = "openssl"))]
+#[cfg(not(any(feature = "openssl", feature = "windows-cng")))]
 pub struct Sha512(sha2::Sha512);
 
-#[cfg(not(feature = "openssl"))]
+#[cfg(not(any(feature = "openssl", feature = "windows-cng")))]
 impl_digest_common!(Md5, 128);
-#[cfg(not(feature = "openssl"))]
+#[cfg(not(any(feature = "openssl", feature = "windows-cng")))]
 impl_digest_common!(Sha1, 160);
 #[cfg(not(feature = "openssl"))]
 impl_digest_common!(Sha224, 224);
-#[cfg(not(feature = "openssl"))]
+#[cfg(not(any(feature = "openssl", feature = "windows-cng")))]
 impl_digest_common!(Sha256, 256);
-#[cfg(not(feature = "openssl"))]
+#[cfg(not(any(feature = "openssl", feature = "windows-cng")))]
 impl_digest_common!(Sha384, 384);
-#[cfg(not(feature = "openssl"))]
+#[cfg(not(any(feature = "openssl", feature = "windows-cng")))]
 impl_digest_common!(Sha512, 512);
 
 // When OpenSSL is built in FIPS mode (or otherwise refuses an algorithm —
@@ -584,6 +584,114 @@ impl_digest_openssl!(
     512,
     openssl::hash::MessageDigest::sha512(),
     sha2::Sha512
+);
+
+#[cfg(feature = "windows-cng")]
+macro_rules! impl_digest_windows_cng {
+    ($algo_type:ident, $size:literal, $md:expr) => {
+        pub struct $algo_type(windows_sys::Win32::Security::Cryptography::BCRYPT_HASH_HANDLE);
+
+        impl $algo_type {
+            pub const BIT_SIZE: usize = $size;
+        }
+
+        impl Default for $algo_type {
+            fn default() -> Self {
+                let mut h_hash: windows_sys::Win32::Security::Cryptography::BCRYPT_HASH_HANDLE =
+                    std::ptr::null_mut();
+                unsafe {
+                    windows_sys::Win32::Security::Cryptography::BCryptCreateHash(
+                        $md,
+                        &mut h_hash,
+                        std::ptr::null_mut(),
+                        0,
+                        std::ptr::null(),
+                        0,
+                        windows_sys::Win32::Security::Cryptography::BCRYPT_HASH_REUSABLE_FLAG,
+                    );
+                }
+                Self(h_hash)
+            }
+        }
+
+        impl Digest for $algo_type {
+            fn hash_update(&mut self, input: &[u8]) {
+                unsafe {
+                    windows_sys::Win32::Security::Cryptography::BCryptHashData(
+                        self.0,
+                        input.as_ptr(),
+                        input.len() as u32,
+                        0,
+                    );
+                }
+            }
+
+            fn hash_finalize(&mut self, out: &mut [u8]) {
+                unsafe {
+                    windows_sys::Win32::Security::Cryptography::BCryptFinishHash(
+                        self.0,
+                        out.as_mut_ptr(),
+                        out.len() as u32,
+                        0,
+                    );
+                }
+            }
+
+            fn reset(&mut self) {
+                // Windows CNG supports "reusable" hashes that can be used anew once
+                // they are Finished. Just finish the current hash into a temporary
+                // buffer.
+                let mut out: [std::mem::MaybeUninit<u8>; Self::BIT_SIZE / 8] =
+                    [const { std::mem::MaybeUninit::uninit() }; Self::BIT_SIZE / 8];
+                unsafe {
+                    self.hash_finalize(out.assume_init_mut());
+                }
+            }
+
+            fn output_bits(&self) -> usize {
+                Self::BIT_SIZE
+            }
+        }
+
+        impl Drop for $algo_type {
+            fn drop(&mut self) {
+                unsafe {
+                    windows_sys::Win32::Security::Cryptography::BCryptDestroyHash(self.0);
+                }
+            }
+        }
+    };
+}
+
+#[cfg(feature = "windows-cng")]
+impl_digest_windows_cng!(
+    Md5,
+    128,
+    windows_sys::Win32::Security::Cryptography::BCRYPT_MD5_ALG_HANDLE
+);
+#[cfg(feature = "windows-cng")]
+impl_digest_windows_cng!(
+    Sha1,
+    160,
+    windows_sys::Win32::Security::Cryptography::BCRYPT_SHA1_ALG_HANDLE
+);
+#[cfg(feature = "windows-cng")]
+impl_digest_windows_cng!(
+    Sha256,
+    256,
+    windows_sys::Win32::Security::Cryptography::BCRYPT_SHA256_ALG_HANDLE
+);
+#[cfg(feature = "windows-cng")]
+impl_digest_windows_cng!(
+    Sha384,
+    384,
+    windows_sys::Win32::Security::Cryptography::BCRYPT_SHA384_ALG_HANDLE
+);
+#[cfg(feature = "windows-cng")]
+impl_digest_windows_cng!(
+    Sha512,
+    512,
+    windows_sys::Win32::Security::Cryptography::BCRYPT_SHA512_ALG_HANDLE
 );
 
 pub struct Sha3_224(sha3::Sha3_224);
