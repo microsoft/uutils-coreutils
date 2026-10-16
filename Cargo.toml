@@ -50,6 +50,18 @@ openssl = [
   "sha512sum?/openssl",
   "uucore/openssl",
 ]
+# Use Windows CNG for supported digests. It's FIPS certified.
+windows-cng = [
+  "cksum?/windows-cng",
+  "md5sum?/windows-cng",
+  "sha1sum?/windows-cng",
+  "sha224sum?/windows-cng",
+  "sha256sum?/windows-cng",
+  "sha384sum?/windows-cng",
+  "sha512sum?/windows-cng",
+  "uucore/windows-cng",
+]
+
 # "test_risky_names" == enable tests that create problematic file names (would make a network share inaccessible to Windows, breaks SVN on Mac OS, etc.)
 test_risky_names = []
 # * only build `uudoc` when `--feature uudoc` is activated

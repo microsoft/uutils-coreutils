@@ -114,10 +114,11 @@ procfs = { workspace = true, optional = true }
 wild = { workspace = true }
 windows-sys = { workspace = true, optional = true, default-features = false, features = [
   "Wdk_System_SystemInformation",
-  "Win32_Security",
-  "Win32_Storage_FileSystem",
   "Win32_Foundation",
   "Win32_Globalization",
+  "Win32_Security_Cryptography",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
   "Win32_System_IO",
   "Win32_System_Ioctl",
   "Win32_System_JobObjects",
@@ -205,6 +206,7 @@ sum = [
 # pure-Rust crates. This dramatically speeds up checksum utilities on CPUs
 # without SHA-NI by using OpenSSL's optimized assembly implementations.
 openssl = ["dep:openssl"]
+windows-cng = ["windows-sys"]
 update-control = ["parser"]
 utf8 = []
 utmpx = ["time", "time/macros", "libc", "dns-lookup"]
