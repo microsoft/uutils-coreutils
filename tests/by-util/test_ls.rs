@@ -6366,12 +6366,12 @@ fn test_ls_hyperlink_encode_link() {
         assert!(
             result
                 .stdout_str()
-                .contains("back%5cslash\x1b\\back\\slash\x1b]8;;\x1b\\")
+                .contains("back%5Cslash\x1b\\back\\slash\x1b]8;;\x1b\\")
         );
         assert!(
             result
                 .stdout_str()
-                .contains("ques%3ftion\x1b\\ques?tion\x1b]8;;\x1b\\")
+                .contains("ques%3Ftion\x1b\\ques?tion\x1b]8;;\x1b\\")
         );
     }
     assert!(
@@ -6536,9 +6536,9 @@ fn test_ls_hyperlink_utf8_encoding() {
     let result = scene.ucmd().args(&["--hyperlink"]).succeeds();
     let output = result.stdout_str();
 
-    assert!(output.contains("caf%c3%a9.txt"));
+    assert!(output.contains("caf%C3%A9.txt"));
     #[cfg(not(windows))]
-    assert!(output.contains("file%3awith%3acolons.txt"));
+    assert!(output.contains("file%3Awith%3Acolons.txt"));
     #[cfg(windows)]
     assert!(output.contains("file-with-colons.txt"));
     assert!(output.contains("file%20with%20spaces.txt"));

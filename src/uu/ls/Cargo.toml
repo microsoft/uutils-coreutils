@@ -46,7 +46,7 @@ fluent = { workspace = true }
 selinux = { workspace = true, optional = true }
 
 # hostname crate does not support WASI (no OS-level hostname API)
-[target.'cfg(not(target_os = "wasi"))'.dependencies]
+[target.'cfg(not(any(windows, target_os = "wasi")))'.dependencies]
 hostname = { workspace = true }
 
 [[bin]]

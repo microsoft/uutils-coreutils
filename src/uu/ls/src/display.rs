@@ -13,7 +13,7 @@ use std::fmt::Display;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
-use std::sync::LazyLock;
+use std::path::Path;
 use std::time::SystemTime;
 /// Show the directory name in the case where several arguments are given to ls
 use std::{borrow::Cow, iter};
@@ -161,7 +161,7 @@ pub fn show_dir_name(
     let escaped_name = escape_dir_name_with_locale(path_data.path().as_os_str(), config);
 
     let name = if config.hyperlink && !config.dired {
-        create_hyperlink(&escaped_name, path_data)
+        create_hyperlink(escaped_name, path_data)
     } else {
         escaped_name
     };
@@ -811,7 +811,7 @@ fn display_item_name(
         |namelen: usize| config.width != 0 && *current_column + namelen > config.width.into();
 
     if config.hyperlink {
-        name = create_hyperlink(&name, path);
+        name = create_hyperlink(name, path);
     }
 
     if let Some(style_manager) = style_manager.as_mut() {
@@ -1286,51 +1286,178 @@ fn classify_file(path: &PathData) -> Option<char> {
     }
 }
 
-fn create_hyperlink(name: &OsStr, path: &PathData) -> OsString {
-    // The `hostname` crate does not support WASI (no OS-level hostname API),
-    // so we use an empty string for hyperlinks on WASI.
-    #[cfg(not(target_os = "wasi"))]
-    static HOSTNAME: LazyLock<OsString> = LazyLock::new(|| hostname::get().unwrap_or_default());
-    #[cfg(target_os = "wasi")]
-    static HOSTNAME: LazyLock<OsString> = LazyLock::new(OsString::new);
-
+fn create_hyperlink(name: OsString, absolute_path: &PathData) -> OsString {
     // OSC 8 hyperlink format: \x1b]8;;URL\x1b\\TEXT\x1b]8;;\x1b\\
     // \x1b = ESC, \x1b\\ = ESC backslash
-    // FIXME: switch to constants once OsStr::new() is const-stable and over our MSRV.
-    let osc_8_head = OsStr::new("\x1b]8;;file://");
-    let osc_8_tail = OsStr::new("\x1b]8;;\x1b\\");
-    let esc_bl = OsStr::new("\x1b\\");
 
-    let absolute_path = fs::canonicalize(path.path()).unwrap_or_default();
-    let mut ret = OsString::with_capacity(
-        osc_8_head.len()
-            + osc_8_tail.len()
-            + HOSTNAME.len()
-            + esc_bl.len()
-            + absolute_path.as_os_str().len(),
+    const OSC_8_HEAD: &[u8] = b"\x1b]8;;";
+    const OSC_8_TAIL: &[u8] = b"\x1b\\";
+    const OSC_8: &[u8] = b"\x1b]8;;\x1b\\";
+    const EXTRA: usize = b"file://...".len();
+
+    let Ok(absolute_path) = fs::canonicalize(absolute_path.path()) else {
+        return name;
+    };
+
+    #[cfg(not(any(windows, target_os = "wasi")))]
+    let hostname = {
+        use std::sync::LazyLock;
+        static HOSTNAME: LazyLock<Option<OsString>> = LazyLock::new(|| {
+            hostname::get()
+                .ok()
+                .filter(|h| !h.as_encoded_bytes().contains(&b'/'))
+        });
+        HOSTNAME.as_deref()
+    };
+    #[cfg(any(windows, target_os = "wasi"))]
+    let hostname: Option<&OsStr> = None;
+
+    let mut ret = Vec::with_capacity(
+        OSC_8_HEAD.len()
+            + hostname.map_or(0, |h| h.as_encoded_bytes().len())
+            + absolute_path.as_os_str().len()
+            + OSC_8_TAIL.len()
+            + name.len()
+            + OSC_8.len()
+            + EXTRA,
     );
-    ret.push(osc_8_head);
-    ret.push(HOSTNAME.as_os_str());
 
-    // a set of safe ASCII bytes that don't need encoding
-    #[cfg(not(windows))]
-    let unencoded = |c| matches!(c, '_' | '-' | '.' | '~' | '/');
-    #[cfg(windows)]
-    let unencoded = |c| matches!(c, '_' | '-' | '.' | '~' | '/' | '\\' | ':');
+    ret.extend_from_slice(OSC_8_HEAD);
+    if !format_file_uri(&mut ret, &absolute_path, hostname) {
+        return name;
+    }
+    ret.extend_from_slice(OSC_8_TAIL);
+    ret.extend_from_slice(name.as_encoded_bytes());
+    ret.extend_from_slice(OSC_8);
 
-    for &b in absolute_path.as_os_str().as_encoded_bytes() {
-        if b.is_ascii_alphanumeric() || unencoded(b as char) {
-            let _ = ret.write_char(b as char);
+    // SAFETY: At this point `ret` contains only ASCII, percent escapes, or `OsStr` bytes.
+    unsafe { OsString::from_encoded_bytes_unchecked(ret) }
+}
+
+#[cfg(windows)]
+fn format_file_uri(ret: &mut Vec<u8>, path: &Path, _hostname: Option<&OsStr>) -> bool {
+    use std::path::{Component, Prefix};
+
+    // 0 = needs percent-encode. Any other value is the value
+    // to use for output. This allows us to neatly map \ to /.
+    //
+    // Even though RFC 8089 permits @ and :, we encode them anyway.
+    // @ is used for WebDAV UNC on Windows, which is reasonable.
+    // But : gets mangled by PathCreateFromUrlW, which is a shell API and I guess that says enough about
+    // what's wrong with it. `PathCreateFromUrlW("file://%3F/C:/foo")` -> `\\?C:\foo` (note the "\").
+    // It's just a fact of life. Like the changing seasons and the rising sun. Not one shell API shall work.
+    static LUT: [u8; 256] = {
+        let allowed =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!$&'()*+,;=/";
+        let mut table = [0; 256];
+        let mut i = 0;
+        while i < allowed.len() {
+            table[allowed[i] as usize] = allowed[i];
+            i += 1;
+        }
+        table[b'\\' as usize] = b'/';
+        table
+    };
+
+    ret.extend_from_slice(b"file://");
+
+    let Some(bytes) = path.to_str().map(str::as_bytes) else {
+        return false;
+    };
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        return false;
+    };
+
+    let mut disk_char = 0u8;
+    let off = match prefix.kind() {
+        Prefix::Verbatim(str) | Prefix::DeviceNS(str) => {
+            // God knows why, but the stdlib is unaware about `\\.\C:`,
+            // and there's no `Prefix::DeviceDisk`, so have to do it ourselves.
+            if let [disk, b':', ..] = str.as_encoded_bytes()
+                && disk.is_ascii_alphabetic()
+            {
+                disk_char = *disk;
+                6 // "\\.\C:"
+            } else {
+                2 // "\\"
+            }
+        }
+        Prefix::Disk(disk) | Prefix::VerbatimDisk(disk) => {
+            let off = prefix.as_os_str().as_encoded_bytes().len();
+            // Ensure that we've got a rooted `C:\foo` path, not `C:foo`.
+            if LUT[bytes.get(off).copied().unwrap_or(0) as usize] != b'/' {
+                return false;
+            }
+            disk_char = disk;
+            off
+        }
+        Prefix::UNC(host, share) | Prefix::VerbatimUNC(host, share) => {
+            // Reject:
+            // * Empty host/share name (invalid)
+            // * localhost (cannot be encoded in a way that PathCreateFromUrlW understands)
+            if host.is_empty() || share.is_empty() || host.eq_ignore_ascii_case("localhost") {
+                return false;
+            }
+            if matches!(prefix.kind(), Prefix::UNC(..)) {
+                2 // "\\"
+            } else {
+                8 // "\\?\UNC\"
+            }
+        }
+    };
+
+    if disk_char != 0 {
+        _ = write!(ret, "/{}:", disk_char.to_ascii_uppercase() as char);
+    }
+
+    for &b in &bytes[bytes.len().min(off)..] {
+        let m = LUT[b as usize];
+        if m != 0 {
+            ret.push(m);
         } else {
-            let _ = write!(ret, "%{b:02x}");
+            _ = write!(ret, "%{b:02X}");
         }
     }
 
-    ret.push(esc_bl);
-    ret.push(name);
-    ret.push(osc_8_tail);
+    true
+}
 
-    ret
+// NOTE: `path` must be absolute and `hostname` must not contain "/".
+#[cfg(not(windows))]
+fn format_file_uri(ret: &mut Vec<u8>, path: &Path, hostname: Option<&OsStr>) -> bool {
+    // Escape @ and : for consistency with Windows; backslashes are filename bytes.
+    static LUT: [u8; 256] = {
+        let allowed =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!$&'()*+,;=/";
+        let mut table = [0; 256];
+        let mut i = 0;
+        while i < allowed.len() {
+            table[allowed[i] as usize] = allowed[i];
+            i += 1;
+        }
+        table
+    };
+
+    fn append_uri_path(ret: &mut Vec<u8>, bytes: &[u8]) {
+        for &b in bytes {
+            let m = LUT[b as usize];
+            if m != 0 {
+                ret.push(m);
+            } else {
+                _ = write!(ret, "%{b:02X}");
+            }
+        }
+    }
+
+    let bytes = path.as_os_str().as_encoded_bytes();
+    // POSIX permits implementation-defined // roots.
+    if bytes.starts_with(b"//") || !bytes.starts_with(b"/") {
+        return false;
+    }
+    ret.extend_from_slice(b"file://");
+    append_uri_path(ret, hostname.unwrap_or_default().as_encoded_bytes());
+    append_uri_path(ret, bytes);
+    true
 }
 
 fn is_hidden(file_path: &DirEntry) -> bool {
@@ -1516,4 +1643,165 @@ fn os_str_starts_with(haystack: &OsStr, needle: &[u8]) -> bool {
 
 fn write_os_str<W: Write>(writer: &mut W, string: &OsStr) -> std::io::Result<()> {
     writer.write_all(&os_str_as_bytes_lossy(string))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn test_format_file_uri_windows() {
+        const CASES: &[(&str, &str)] = &[
+            (r"\\.\C:\", "file:///C:/"),
+            (r"C:\", "file:///C:/"),
+            (r"c:\MiXeD\file", "file:///C:/MiXeD/file"),
+            (r"C:\directory\", "file:///C:/directory/"),
+            (r"\\server\share", "file://server/share"),
+            (r"\\SERVER\Share\", "file://SERVER/Share/"),
+            (r"\\server\share\file", "file://server/share/file"),
+            (
+                r"\\server@SSL@443\DavWWWRoot\file",
+                "file://server%40SSL%40443/DavWWWRoot/file",
+            ),
+            (r"\\?\C:\", "file:///C:/"),
+            (r"\\?\C:\directory\file", "file:///C:/directory/file"),
+            (r"\\?\UNC\server\share\file", "file://server/share/file"),
+            (r"\\.\DeviceName", "file://./DeviceName"),
+            (r"\\.\C:\", "file:///C:/"),
+            (r"\\.\C:\file", "file:///C:/file"),
+            (
+                r"C:\-._~!$&'()*+,;=:@#?",
+                "file:///C:/-._~!$&'()*+,;=%3A%40%23%3F",
+            ),
+            (r"C:\%2F%252F", "file:///C:/%252F%25252F"),
+            (
+                "C:\\sp ace\\caf\u{e9}\u{1f600}.txt",
+                "file:///C:/sp%20ace/caf%C3%A9%F0%9F%98%80.txt",
+            ),
+            (
+                "\\\\h\u{f6}st\\share\\caf\u{e9}",
+                "file://h%C3%B6st/share/caf%C3%A9",
+            ),
+        ];
+
+        for &(path, expected) in CASES {
+            let mut output = Vec::new();
+            assert!(
+                format_file_uri(&mut output, Path::new(path), None),
+                "{path}"
+            );
+            assert_eq!(str::from_utf8(&output).unwrap(), expected, "{path}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_format_file_uri_windows_rejected() {
+        use std::os::windows::ffi::OsStringExt as _;
+
+        for path in [
+            "",
+            ".",
+            "..",
+            r"relative\file",
+            "C:",
+            r"C:file",
+            r"1:\file",
+            r":\file",
+            r"\",
+            "/",
+            r"\\",
+            "//",
+            r"\\server",
+            r"\\server\",
+            r"\\\share\file",
+            r"\\localhost\share\file",
+            r"\\LOCALHOST\share\file",
+            r"\\?\UNC\localhost\share\file",
+        ] {
+            let mut output = Vec::new();
+            assert!(
+                !format_file_uri(&mut output, Path::new(path), None),
+                "{path:?}"
+            );
+        }
+
+        let path = OsString::from_wide(&[0x43, 0x3A, 0x5C, 0xD800]);
+        assert!(!format_file_uri(&mut Vec::new(), Path::new(&path), None));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_format_file_uri_unix() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let cases: &[(&[u8], &str)] = &[
+            (b"/", "/"),
+            (b"/Case-Sensitive/File", "/Case-Sensitive/File"),
+            (b"/dir/", "/dir/"),
+            (b"/dir//file", "/dir//file"),
+            (b"/dir/./file", "/dir/./file"),
+            (b"/dir/../file", "/dir/../file"),
+            (b"/-._~!$&'()*+,;=", "/-._~!$&'()*+,;="),
+            (b"/sp ace/trailing. ", "/sp%20ace/trailing.%20"),
+            (b"/C:\\user@host:80", "/C%3A%5Cuser%40host%3A80"),
+            (b"/file#fragment?query", "/file%23fragment%3Fquery"),
+            (
+                b"/[brackets]/{braces}|<>\"",
+                "/%5Bbrackets%5D/%7Bbraces%7D%7C%3C%3E%22",
+            ),
+            (b"/%2F%252F", "/%252F%25252F"),
+            (b"/\x01\t\r\n\x1b\x7f", "/%01%09%0D%0A%1B%7F"),
+            ("/caf\u{e9}/\u{1f600}".as_bytes(), "/caf%C3%A9/%F0%9F%98%80"),
+            ("/cafe\u{301}".as_bytes(), "/cafe%CC%81"),
+            (
+                b"/raw-\xff-\x80-\xc0\xaf-\xed\xa0\x80",
+                "/raw-%FF-%80-%C0%AF-%ED%A0%80",
+            ),
+        ];
+        for &(path, escaped) in cases {
+            let mut output = Vec::new();
+            assert!(
+                format_file_uri(
+                    &mut output,
+                    Path::new(OsStr::from_bytes(path)),
+                    Some(OsStr::new("My-Host.example"))
+                ),
+                "{path:?}"
+            );
+            assert_eq!(
+                output,
+                format!("file://My-Host.example{escaped}").as_bytes(),
+                "{path:?}"
+            );
+        }
+
+        let mut output = Vec::new();
+        assert!(format_file_uri(&mut output, Path::new("/dir/file"), None));
+        assert_eq!(output, b"file:///dir/file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_format_file_uri_unix_rejected() {
+        for path in [
+            "",
+            ".",
+            "..",
+            "dir/file",
+            "C:/file",
+            r"\file",
+            "//",
+            "//host/file",
+            "///file",
+            "////",
+        ] {
+            let mut output = Vec::new();
+            assert!(
+                !format_file_uri(&mut output, Path::new(path), Some(OsStr::new("host"))),
+                "{path:?}"
+            );
+        }
+    }
 }
